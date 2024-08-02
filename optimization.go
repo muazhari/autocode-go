@@ -333,6 +333,7 @@ func NewOptimization(
 	clientHost string,
 	clientPort int64,
 	clientName string,
+	buildArgs []string,
 ) (optimization *Optimization) {
 	transformedVariables := map[string]any{}
 	for _, variable := range variables {
@@ -340,7 +341,7 @@ func NewOptimization(
 		transformedVariables[variableId] = variable
 	}
 	interpreter := fast.New()
-	//interpreter.SetBuildArgs([]string{"-gcflags=all=-N -l"})
+	interpreter.SetBuildArgs(buildArgs)
 	imports := `
 				import (
 					"github.com/muazhari/autocode-go"
