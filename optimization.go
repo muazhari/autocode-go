@@ -313,11 +313,8 @@ type Optimization struct {
 	Application            OptimizationApplication
 	ServerHost             string
 	ServerPort             int64
-	ClientHost             string
-	ClientPort             int64
 	ServerUrl              string
-	ClientUrl              string
-	ClientName             string
+	ClientPort             int64
 	Interpreter            *fast.Interp
 	VariableValues         map[string]*OptimizationValue
 	ExecutedVariableValues map[string]any
@@ -328,9 +325,7 @@ func NewOptimization(
 	application OptimizationApplication,
 	serverHost string,
 	serverPort int64,
-	clientHost string,
 	clientPort int64,
-	clientName string,
 	buildArgs []string,
 ) (optimization *Optimization) {
 	transformedVariables := map[string]any{}
@@ -352,10 +347,7 @@ func NewOptimization(
 		ServerHost:  serverHost,
 		ServerPort:  serverPort,
 		ServerUrl:   fmt.Sprintf("http://%s:%d", serverHost, serverPort),
-		ClientHost:  clientHost,
 		ClientPort:  clientPort,
-		ClientUrl:   fmt.Sprintf("http://%s:%d", clientHost, clientPort),
-		ClientName:  clientName,
 		Interpreter: interpreter,
 	}
 
@@ -372,9 +364,7 @@ func getFieldValue(variable any, field string) (output any) {
 func (self *Optimization) Prepare() {
 	requestBody := &OptimizationPrepareRequest{
 		Variables: self.Variables,
-		Host:      self.ClientHost,
 		Port:      self.ClientPort,
-		Name:      self.ClientName,
 	}
 
 	requestBodyMap := requestBody.Map()
@@ -468,7 +458,7 @@ func (self *Optimization) StartClientServer() {
 	apiRouter := router.PathPrefix("/apis").Subrouter()
 	apiRouter.HandleFunc("/optimizations/evaluates/prepares", self.EvaluatePrepare).Methods(http.MethodPost)
 	apiRouter.HandleFunc("/optimizations/evaluates/runs", self.EvaluateRun).Methods(http.MethodGet)
-	address := fmt.Sprintf("%s:%d", self.ClientHost, self.ClientPort)
+	address := fmt.Sprintf("%s:%d", "0.0.0.0", self.ClientPort)
 	serverErr := fasthttp.ListenAndServe(address, fasthttpadaptor.NewFastHTTPHandler(router))
 	if serverErr != nil {
 		panic(serverErr)
@@ -496,10 +486,8 @@ func (self *Optimization) EvaluateRun(writer http.ResponseWriter, reader *http.R
 }
 
 type OptimizationPrepareRequest struct {
-	Variables map[string]any `json:"variables"`
-	Host      string         `json:"host"`
 	Port      int64          `json:"port"`
-	Name      string         `json:"name"`
+	Variables map[string]any `json:"variables"`
 }
 
 func (self *OptimizationPrepareRequest) Map() map[string]any {
@@ -521,9 +509,7 @@ func (self *OptimizationPrepareRequest) Map() map[string]any {
 	}
 	return map[string]any{
 		"variables": transformedVariables,
-		"host":      self.Host,
 		"port":      self.Port,
-		"name":      self.Name,
 	}
 }
 
@@ -533,7 +519,4 @@ type OptimizationPrepareResponse struct {
 
 type OptimizationEvaluatePrepareRequest struct {
 	VariableValues map[string]*OptimizationValue `json:"variable_values"`
-}
-
-type OptimizationEvaluateRunRequest struct {
 }
