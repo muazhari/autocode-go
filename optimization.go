@@ -13,9 +13,8 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
-	"io"
-	"log"
 	"net/http"
+	"os"
 	"reflect"
 	"runtime"
 	"strings"
@@ -377,6 +376,7 @@ func (self *Optimization) Prepare() {
 		Host:      self.ClientHost,
 		Port:      self.ClientPort,
 		Name:      self.ClientName,
+		WorkerId:  os.Getenv("AUTOCODE_WORKER_ID"),
 	}
 
 	requestBodyMap := requestBody.Map()
@@ -469,7 +469,7 @@ func (self *Optimization) StartClientServer() {
 	router := mux.NewRouter()
 	apiRouter := router.PathPrefix("/apis").Subrouter()
 	apiRouter.HandleFunc("/optimizations/evaluates/prepares", self.EvaluatePrepare).Methods(http.MethodPost)
-	apiRouter.HandleFunc("/optimizations/evaluates/runs", self.EvaluateRun).Methods(http.MethodPost)
+	apiRouter.HandleFunc("/optimizations/evaluates/runs", self.EvaluateRun).Methods(http.MethodGet)
 	address := fmt.Sprintf("%s:%d", self.ClientHost, self.ClientPort)
 	serverErr := fasthttp.ListenAndServe(address, fasthttpadaptor.NewFastHTTPHandler(router))
 	if serverErr != nil {
@@ -489,15 +489,6 @@ func (self *Optimization) EvaluatePrepare(writer http.ResponseWriter, reader *ht
 }
 
 func (self *Optimization) EvaluateRun(writer http.ResponseWriter, reader *http.Request) {
-	requestBody := &OptimizationEvaluateRunRequest{}
-	decodeErr := json.NewDecoder(reader.Body).Decode(requestBody)
-	if decodeErr != nil {
-		responseBodyBytes, _ := io.ReadAll(reader.Body)
-		log.Println(fmt.Sprintf("failed to decode request body: %s", string(responseBodyBytes)))
-		writer.WriteHeader(http.StatusInternalServerError)
-		panic(decodeErr)
-	}
-
 	evaluation := self.Application.Evaluate(self)
 
 	encodeErr := json.NewEncoder(writer).Encode(evaluation)
@@ -511,6 +502,7 @@ type OptimizationPrepareRequest struct {
 	Host      string         `json:"host"`
 	Port      int64          `json:"port"`
 	Name      string         `json:"name"`
+	WorkerId  string         `json:"worker_id"`
 }
 
 func (self *OptimizationPrepareRequest) Map() map[string]any {
@@ -535,19 +527,17 @@ func (self *OptimizationPrepareRequest) Map() map[string]any {
 		"host":      self.Host,
 		"port":      self.Port,
 		"name":      self.Name,
+		"worker_id": self.WorkerId,
 	}
 }
 
 type OptimizationPrepareResponse struct {
-	Variables  map[string]any `json:"variables"`
-	NumWorkers int64          `json:"num_workers"`
+	Variables map[string]any `json:"variables"`
 }
 
 type OptimizationEvaluatePrepareRequest struct {
-	WorkerId       string                        `json:"worker_id"`
 	VariableValues map[string]*OptimizationValue `json:"variable_values"`
 }
 
 type OptimizationEvaluateRunRequest struct {
-	WorkerId string `json:"worker_id"`
 }
