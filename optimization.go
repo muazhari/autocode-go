@@ -14,7 +14,6 @@ import (
 	"go/printer"
 	"go/token"
 	"net/http"
-	"os"
 	"reflect"
 	"runtime"
 	"strings"
@@ -376,7 +375,6 @@ func (self *Optimization) Prepare() {
 		Host:      self.ClientHost,
 		Port:      self.ClientPort,
 		Name:      self.ClientName,
-		WorkerId:  os.Getenv("AUTOCODE_WORKER_ID"),
 	}
 
 	requestBodyMap := requestBody.Map()
@@ -502,7 +500,6 @@ type OptimizationPrepareRequest struct {
 	Host      string         `json:"host"`
 	Port      int64          `json:"port"`
 	Name      string         `json:"name"`
-	WorkerId  string         `json:"worker_id"`
 }
 
 func (self *OptimizationPrepareRequest) Map() map[string]any {
@@ -527,7 +524,6 @@ func (self *OptimizationPrepareRequest) Map() map[string]any {
 		"host":      self.Host,
 		"port":      self.Port,
 		"name":      self.Name,
-		"worker_id": self.WorkerId,
 	}
 }
 
