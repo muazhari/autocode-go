@@ -386,14 +386,14 @@ func (self *Optimization) Prepare() {
 		panic("Failed to prepare")
 	}
 
-	responseBody := &OptimizationPrepareResponse{}
-	decodeErr := json.NewDecoder(response.Body).Decode(responseBody)
+	responseBody := map[string]any{}
+	decodeErr := json.NewDecoder(response.Body).Decode(&responseBody)
 	if decodeErr != nil {
 		panic(decodeErr)
 	}
 
 	self.Variables = map[string]any{}
-	for newVariableId, newVariable := range responseBody.Variables {
+	for newVariableId, newVariable := range responseBody["variables"].(map[string]any) {
 		newVariableType := newVariable.(map[string]any)["type"].(string)
 		newVariableName := newVariable.(map[string]any)["name"].(string)
 		if newVariableType == VARIABLE_CHOICE {
@@ -406,10 +406,10 @@ func (self *Optimization) Prepare() {
 					functionName := splitFunctionName[len(splitFunctionName)-1]
 					functionString := newOptionData["string"].(string)
 					self.Interpreter.Eval(functionString)
-					function, evalErr := self.Interpreter.Eval1(functionName)
-					if evalErr != nil {
-						panic(evalErr)
-					}
+					function, _ := self.Interpreter.Eval1(functionName)
+					//if evalErr != nil {
+					//	panic(evalErr)
+					//}
 					newOptions[newOptionId] = &OptimizationValue{
 						Id:   newOptionId,
 						Type: newOptionType,
@@ -457,24 +457,28 @@ func (self *Optimization) Prepare() {
 				Options: newOptions,
 			}
 		} else if newVariableType == VARIABLE_INTEGER {
-			newBounds := newVariable.(map[string]any)["bounds"].([2]int64)
 			self.Variables[newVariableId] = &OptimizationInteger{
 				OptimizationVariable: &OptimizationVariable{
 					Id:   newVariableId,
 					Type: newVariableType,
 					Name: newVariableName,
 				},
-				Bounds: newBounds,
+				Bounds: [2]int64{
+					int64(newVariable.(map[string]any)["bounds"].([]any)[0].(float64)),
+					int64(newVariable.(map[string]any)["bounds"].([]any)[1].(float64)),
+				},
 			}
 		} else if newVariableType == VARIABLE_REAL {
-			newBounds := newVariable.(map[string]any)["bounds"].([2]float64)
 			self.Variables[newVariableId] = &OptimizationReal{
 				OptimizationVariable: &OptimizationVariable{
 					Id:   newVariableId,
 					Type: newVariableType,
 					Name: newVariableName,
 				},
-				Bounds: newBounds,
+				Bounds: [2]float64{
+					newVariable.(map[string]any)["bounds"].([]any)[0].(float64),
+					newVariable.(map[string]any)["bounds"].([]any)[1].(float64),
+				},
 			}
 		} else if newVariableType == VARIABLE_BINARY {
 			self.Variables[newVariableId] = &OptimizationBinary{
