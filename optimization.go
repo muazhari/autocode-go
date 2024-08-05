@@ -278,7 +278,7 @@ func (self *Optimization) GetValue(variableName string, arguments ...any) (outpu
 		}
 	}
 	if variableId == "" {
-		panic(fmt.Sprintf("variable not found: %s", variableName))
+		panic(fmt.Errorf("variable not found: %s", variableName))
 	}
 
 	executedValue, executedValueExists := self.ExecutedVariableValues[variableId]
@@ -287,7 +287,7 @@ func (self *Optimization) GetValue(variableName string, arguments ...any) (outpu
 	}
 	value, valueExists := self.VariableValues[variableId]
 	if valueExists == false {
-		panic(fmt.Sprintf("variable value not found: %s", variableName))
+		panic(fmt.Errorf("variable value not found: %s", variableName))
 	}
 	if value.Type == VALUE_FUNCTION {
 		variable := self.Variables[variableId]
@@ -302,7 +302,7 @@ func (self *Optimization) GetValue(variableName string, arguments ...any) (outpu
 	} else if value.Type == VALUE_BOOLEAN {
 		output = value.Data.(bool)
 	} else {
-		panic(fmt.Sprintf("unsupported value type: %s", value.Type))
+		panic(fmt.Errorf("unsupported value type: %s", value.Type))
 	}
 	self.ExecutedVariableValues[variableId] = output
 	return output
@@ -392,61 +392,100 @@ func (self *Optimization) Prepare() {
 		panic(decodeErr)
 	}
 
+	self.Variables = map[string]any{}
 	for newVariableId, newVariable := range responseBody.Variables {
 		newVariableType := newVariable.(map[string]any)["type"].(string)
 		newVariableName := newVariable.(map[string]any)["name"].(string)
-		oldVariable, _ := self.Variables[newVariableId]
 		if newVariableType == VARIABLE_CHOICE {
-			oldOptions := getFieldValue(oldVariable, "Options").(map[string]*OptimizationValue)
 			newOptions := map[string]*OptimizationValue{}
-			for optionId, option := range newVariable.(map[string]any)["options"].(map[string]any) {
-				oldOption, isExists := oldOptions[optionId]
-				optionType := option.(map[string]any)["type"].(string)
-				optionData := option.(map[string]any)["data"].(map[string]any)
-				if optionType == VALUE_FUNCTION {
-					if isExists == true {
-						oldOptionData := oldOption.Data.(*OptimizationFunctionValue)
-						oldOptionData.ErrorPotentiality = optionData["error_potentiality"].(float64)
-						oldOptionData.Complexity = optionData["complexity"].(float64)
-						oldOptionData.Modularity = optionData["modularity"].(float64)
-						oldOptionData.OverallMaintainability = optionData["overall_maintainability"].(float64)
-						oldOptionData.Understandability = optionData["understandability"].(float64)
-						oldOptionData.Readability = optionData["readability"].(float64)
-						newOptions[optionId] = oldOption
-					} else {
-						splitFunctionName := strings.Split(optionData["name"].(string), ".")
-						functionName := splitFunctionName[len(splitFunctionName)-1]
-						functionString := optionData["string"].(string)
-						self.Interpreter.Eval(functionString)
-						function, _ := self.Interpreter.Eval1(functionName)
-						newOptionData := &OptimizationFunctionValue{
+			for newOptionId, newOption := range newVariable.(map[string]any)["options"].(map[string]any) {
+				newOptionType := newOption.(map[string]any)["type"].(string)
+				if newOptionType == VALUE_FUNCTION {
+					newOptionData := newOption.(map[string]any)["data"].(map[string]any)
+					splitFunctionName := strings.Split(newOptionData["name"].(string), ".")
+					functionName := splitFunctionName[len(splitFunctionName)-1]
+					functionString := newOptionData["string"].(string)
+					self.Interpreter.Eval(functionString)
+					function, evalErr := self.Interpreter.Eval1(functionName)
+					if evalErr != nil {
+						panic(evalErr)
+					}
+					newOptions[newOptionId] = &OptimizationValue{
+						Id:   newOptionId,
+						Type: newOptionType,
+						Data: &OptimizationFunctionValue{
 							Function:               function.Interface().(FunctionValue),
-							ErrorPotentiality:      optionData["error_potentiality"].(float64),
-							Complexity:             optionData["complexity"].(float64),
-							Modularity:             optionData["modularity"].(float64),
-							OverallMaintainability: optionData["overall_maintainability"].(float64),
-							Understandability:      optionData["understandability"].(float64),
-							Readability:            optionData["readability"].(float64),
-						}
-						newOptions[optionId] = &OptimizationValue{
-							Id:   optionId,
-							Type: optionType,
-							Data: newOptionData,
-						}
+							ErrorPotentiality:      newOptionData["error_potentiality"].(float64),
+							Complexity:             newOptionData["complexity"].(float64),
+							Modularity:             newOptionData["modularity"].(float64),
+							OverallMaintainability: newOptionData["overall_maintainability"].(float64),
+							Understandability:      newOptionData["understandability"].(float64),
+							Readability:            newOptionData["readability"].(float64),
+						},
+					}
+				} else if newOptionType == VALUE_INTEGER {
+					newOptionData := newOption.(map[string]any)["data"].(int64)
+					newOptions[newOptionId] = &OptimizationValue{
+						Id:   newOptionId,
+						Type: newOptionType,
+						Data: newOptionData,
+					}
+				} else if newOptionType == VALUE_FLOAT {
+					newOptionData := newOption.(map[string]any)["data"].(float64)
+					newOptions[newOptionId] = &OptimizationValue{
+						Id:   newOptionId,
+						Type: newOptionType,
+						Data: newOptionData,
+					}
+				} else if newOptionType == VALUE_BOOLEAN {
+					newOptionData := newOption.(map[string]any)["data"].(bool)
+					newOptions[newOptionId] = &OptimizationValue{
+						Id:   newOptionId,
+						Type: newOptionType,
+						Data: newOptionData,
 					}
 				} else {
-					newOptions[optionId] = oldOption
+					panic(fmt.Errorf("unsupported newOption type: %s", newOptionType))
 				}
 			}
-			newChoice := &OptimizationChoice{
+			self.Variables[newVariableId] = &OptimizationChoice{
 				OptimizationVariable: &OptimizationVariable{
 					Id:   newVariableId,
-					Type: VARIABLE_CHOICE,
+					Type: newVariableType,
 					Name: newVariableName,
 				},
 				Options: newOptions,
 			}
-			self.Variables[newVariableId] = newChoice
+		} else if newVariableType == VARIABLE_INTEGER {
+			newBounds := newVariable.(map[string]any)["bounds"].([2]int64)
+			self.Variables[newVariableId] = &OptimizationInteger{
+				OptimizationVariable: &OptimizationVariable{
+					Id:   newVariableId,
+					Type: newVariableType,
+					Name: newVariableName,
+				},
+				Bounds: newBounds,
+			}
+		} else if newVariableType == VARIABLE_REAL {
+			newBounds := newVariable.(map[string]any)["bounds"].([2]float64)
+			self.Variables[newVariableId] = &OptimizationReal{
+				OptimizationVariable: &OptimizationVariable{
+					Id:   newVariableId,
+					Type: newVariableType,
+					Name: newVariableName,
+				},
+				Bounds: newBounds,
+			}
+		} else if newVariableType == VARIABLE_BINARY {
+			self.Variables[newVariableId] = &OptimizationBinary{
+				OptimizationVariable: &OptimizationVariable{
+					Id:   newVariableId,
+					Type: newVariableType,
+					Name: newVariableName,
+				},
+			}
+		} else {
+			panic(fmt.Errorf("unsupported variable type: %s", newVariableType))
 		}
 	}
 
