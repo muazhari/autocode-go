@@ -264,7 +264,6 @@ type OptimizationEvaluateRunResponse struct {
 }
 
 type OptimizationApplication interface {
-	Duplicate(ctx *Optimization) any
 	Evaluate(ctx *Optimization) *OptimizationEvaluateRunResponse
 }
 
