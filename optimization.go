@@ -362,6 +362,7 @@ func getFieldValue(variable any, field string) (output any) {
 
 func (self *Optimization) Prepare() {
 	requestBody := &OptimizationPrepareRequest{
+		Language:  "go",
 		Variables: self.Variables,
 		Port:      self.ClientPort,
 	}
@@ -528,6 +529,7 @@ func (self *Optimization) EvaluateRun(writer http.ResponseWriter, reader *http.R
 }
 
 type OptimizationPrepareRequest struct {
+	Language  string         `json:"language"`
 	Port      int64          `json:"port"`
 	Variables map[string]any `json:"variables"`
 }
@@ -550,6 +552,7 @@ func (self *OptimizationPrepareRequest) Map() map[string]any {
 		}
 	}
 	return map[string]any{
+		"language":  self.Language,
 		"variables": transformedVariables,
 		"port":      self.Port,
 	}
