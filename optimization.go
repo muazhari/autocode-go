@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"github.com/muazhari/gomacro-custom/fast"
 	"github.com/valyala/fasthttp"
 	"github.com/valyala/fasthttp/fasthttpadaptor"
 	"go/ast"
@@ -30,7 +28,6 @@ const VALUE_FLOAT = "float"
 
 type OptimizationVariable struct {
 	Id   string `json:"id"`
-	Name string `json:"name"`
 	Type string `json:"type"`
 }
 
@@ -38,11 +35,10 @@ type OptimizationBinary struct {
 	*OptimizationVariable
 }
 
-func NewOptimizationBinary(name string) *OptimizationBinary {
+func NewOptimizationBinary(id string) *OptimizationBinary {
 	return &OptimizationBinary{
 		OptimizationVariable: &OptimizationVariable{
-			Id:   uuid.NewString(),
-			Name: name,
+			Id:   id,
 			Type: VARIABLE_BINARY,
 		},
 	}
@@ -52,7 +48,6 @@ func (self *OptimizationBinary) Map() (output map[string]any) {
 	data := map[string]any{}
 	data["id"] = self.Id
 	data["type"] = self.Type
-	data["name"] = self.Name
 	output = data
 	return output
 }
@@ -66,17 +61,15 @@ func (self *OptimizationInteger) Map() (output map[string]any) {
 	data := map[string]any{}
 	data["id"] = self.Id
 	data["type"] = self.Type
-	data["name"] = self.Name
 	data["bounds"] = self.Bounds
 	output = data
 	return output
 }
 
-func NewOptimizationInteger(name string, lowerBound int64, upperBound int64) *OptimizationInteger {
+func NewOptimizationInteger(id string, lowerBound int64, upperBound int64) *OptimizationInteger {
 	return &OptimizationInteger{
 		OptimizationVariable: &OptimizationVariable{
-			Id:   uuid.NewString(),
-			Name: name,
+			Id:   id,
 			Type: VARIABLE_INTEGER,
 		},
 		Bounds: [2]int64{lowerBound, upperBound},
@@ -92,17 +85,15 @@ func (self *OptimizationReal) Map() (output map[string]any) {
 	data := map[string]any{}
 	data["id"] = self.Id
 	data["type"] = self.Type
-	data["name"] = self.Name
 	data["bounds"] = self.Bounds
 	output = data
 	return output
 }
 
-func NewOptimizationReal(name string, lowerBound float64, upperBound float64) *OptimizationReal {
+func NewOptimizationReal(id string, lowerBound float64, upperBound float64) *OptimizationReal {
 	return &OptimizationReal{
 		OptimizationVariable: &OptimizationVariable{
-			Id:   uuid.NewString(),
-			Name: name,
+			Id:   id,
 			Type: VARIABLE_REAL,
 		},
 		Bounds: [2]float64{lowerBound, upperBound},
@@ -118,7 +109,6 @@ func (self *OptimizationChoice) Map() (output map[string]any) {
 	data := map[string]any{}
 	data["id"] = self.Id
 	data["type"] = self.Type
-	data["name"] = self.Name
 	options := map[string]any{}
 	data["options"] = options
 	for optionId, option := range self.Options {
@@ -152,10 +142,10 @@ func getType(value any) string {
 	}
 }
 
-func NewOptimizationChoice(name string, options []any) *OptimizationChoice {
+func NewOptimizationChoice(id string, options []any) *OptimizationChoice {
 	transformedOptions := map[string]*OptimizationValue{}
-	for _, option := range options {
-		optionId := uuid.NewString()
+	for index, option := range options {
+		optionId := fmt.Sprintf("%s_%d", id, index)
 		optionType := getType(option)
 		if optionType == VALUE_FUNCTION {
 			option = &OptimizationFunctionValue{
@@ -176,8 +166,7 @@ func NewOptimizationChoice(name string, options []any) *OptimizationChoice {
 	}
 	return &OptimizationChoice{
 		OptimizationVariable: &OptimizationVariable{
-			Id:   uuid.NewString(),
-			Name: name,
+			Id:   id,
 			Type: VARIABLE_CHOICE,
 		},
 		Options: transformedOptions,
@@ -267,26 +256,14 @@ type OptimizationApplication interface {
 	Evaluate(ctx *Optimization) *OptimizationEvaluateRunResponse
 }
 
-func (self *Optimization) GetValue(variableName string, arguments ...any) (output any) {
-	variableId := ""
-	for currentVariableId, currentVariable := range self.Variables {
-		currentVariableName := getFieldValue(currentVariable, "Name")
-		if currentVariableName == variableName {
-			variableId = currentVariableId
-			break
-		}
-	}
-	if variableId == "" {
-		panic(fmt.Errorf("variable not found: %s", variableName))
-	}
-
+func (self *Optimization) GetValue(variableId string, arguments ...any) (output any) {
 	executedValue, executedValueExists := self.ExecutedVariableValues[variableId]
 	if executedValueExists == true {
 		return executedValue
 	}
 	value, valueExists := self.VariableValues[variableId]
 	if valueExists == false {
-		panic(fmt.Errorf("variable value not found: %s", variableName))
+		panic(fmt.Errorf("variable value not found: %s", variableId))
 	}
 	if value.Type == VALUE_FUNCTION {
 		variable := self.Variables[variableId]
@@ -314,7 +291,6 @@ type Optimization struct {
 	ServerPort             int64
 	ServerUrl              string
 	ClientPort             int64
-	Interpreter            *fast.Interp
 	VariableValues         map[string]*OptimizationValue
 	ExecutedVariableValues map[string]any
 }
@@ -325,21 +301,16 @@ func NewOptimization(
 	serverHost string,
 	serverPort int64,
 	clientPort int64,
-	buildArgs []string,
 ) (optimization *Optimization) {
 	transformedVariables := map[string]any{}
 	for _, variable := range variables {
 		variableId := getFieldValue(variable, "Id").(string)
+		_, variableExists := transformedVariables[variableId]
+		if variableExists == true {
+			panic(fmt.Errorf("variable already exists: %s", variableId))
+		}
 		transformedVariables[variableId] = variable
 	}
-	interpreter := fast.New()
-	interpreter.SetBuildArgs(buildArgs)
-	imports := `
-				import (
-					"github.com/muazhari/autocode-go"
-				)
-				`
-	interpreter.Eval(imports)
 	optimization = &Optimization{
 		Variables:   transformedVariables,
 		Application: application,
@@ -347,7 +318,6 @@ func NewOptimization(
 		ServerPort:  serverPort,
 		ServerUrl:   fmt.Sprintf("http://%s:%d", serverHost, serverPort),
 		ClientPort:  clientPort,
-		Interpreter: interpreter,
 	}
 
 	return optimization
@@ -392,29 +362,22 @@ func (self *Optimization) Prepare() {
 		panic(decodeErr)
 	}
 
-	self.Variables = map[string]any{}
-	for newVariableId, newVariable := range responseBody["variables"].(map[string]any) {
+	for variableId, newVariable := range responseBody["variables"].(map[string]any) {
 		newVariableType := newVariable.(map[string]any)["type"].(string)
-		newVariableName := newVariable.(map[string]any)["name"].(string)
 		if newVariableType == VARIABLE_CHOICE {
 			newOptions := map[string]*OptimizationValue{}
-			for newOptionId, newOption := range newVariable.(map[string]any)["options"].(map[string]any) {
+			for optionId, newOption := range newVariable.(map[string]any)["options"].(map[string]any) {
 				newOptionType := newOption.(map[string]any)["type"].(string)
 				if newOptionType == VALUE_FUNCTION {
 					newOptionData := newOption.(map[string]any)["data"].(map[string]any)
-					splitFunctionName := strings.Split(newOptionData["name"].(string), ".")
-					functionName := splitFunctionName[len(splitFunctionName)-1]
-					functionString := newOptionData["string"].(string)
-					self.Interpreter.Eval(functionString)
-					function, _ := self.Interpreter.Eval1(functionName)
-					//if evalErr != nil {
-					//	panic(evalErr)
-					//}
-					newOptions[newOptionId] = &OptimizationValue{
-						Id:   newOptionId,
+					oldVariable := self.Variables[variableId]
+					oldOptions := oldVariable.(*OptimizationChoice).Options
+					oldOptionData := oldOptions[optionId].Data.(*OptimizationFunctionValue)
+					newOptions[optionId] = &OptimizationValue{
+						Id:   optionId,
 						Type: newOptionType,
 						Data: &OptimizationFunctionValue{
-							Function:               function.Interface().(FunctionValue),
+							Function:               oldOptionData.Function,
 							ErrorPotentiality:      newOptionData["error_potentiality"].(float64),
 							Complexity:             newOptionData["complexity"].(float64),
 							Modularity:             newOptionData["modularity"].(float64),
@@ -425,22 +388,22 @@ func (self *Optimization) Prepare() {
 					}
 				} else if newOptionType == VALUE_INTEGER {
 					newOptionData := newOption.(map[string]any)["data"].(int64)
-					newOptions[newOptionId] = &OptimizationValue{
-						Id:   newOptionId,
+					newOptions[optionId] = &OptimizationValue{
+						Id:   optionId,
 						Type: newOptionType,
 						Data: newOptionData,
 					}
 				} else if newOptionType == VALUE_FLOAT {
 					newOptionData := newOption.(map[string]any)["data"].(float64)
-					newOptions[newOptionId] = &OptimizationValue{
-						Id:   newOptionId,
+					newOptions[optionId] = &OptimizationValue{
+						Id:   optionId,
 						Type: newOptionType,
 						Data: newOptionData,
 					}
 				} else if newOptionType == VALUE_BOOLEAN {
 					newOptionData := newOption.(map[string]any)["data"].(bool)
-					newOptions[newOptionId] = &OptimizationValue{
-						Id:   newOptionId,
+					newOptions[optionId] = &OptimizationValue{
+						Id:   optionId,
 						Type: newOptionType,
 						Data: newOptionData,
 					}
@@ -448,20 +411,18 @@ func (self *Optimization) Prepare() {
 					panic(fmt.Errorf("unsupported newOption type: %s", newOptionType))
 				}
 			}
-			self.Variables[newVariableId] = &OptimizationChoice{
+			self.Variables[variableId] = &OptimizationChoice{
 				OptimizationVariable: &OptimizationVariable{
-					Id:   newVariableId,
+					Id:   variableId,
 					Type: newVariableType,
-					Name: newVariableName,
 				},
 				Options: newOptions,
 			}
 		} else if newVariableType == VARIABLE_INTEGER {
-			self.Variables[newVariableId] = &OptimizationInteger{
+			self.Variables[variableId] = &OptimizationInteger{
 				OptimizationVariable: &OptimizationVariable{
-					Id:   newVariableId,
+					Id:   variableId,
 					Type: newVariableType,
-					Name: newVariableName,
 				},
 				Bounds: [2]int64{
 					int64(newVariable.(map[string]any)["bounds"].([]any)[0].(float64)),
@@ -469,11 +430,10 @@ func (self *Optimization) Prepare() {
 				},
 			}
 		} else if newVariableType == VARIABLE_REAL {
-			self.Variables[newVariableId] = &OptimizationReal{
+			self.Variables[variableId] = &OptimizationReal{
 				OptimizationVariable: &OptimizationVariable{
-					Id:   newVariableId,
+					Id:   variableId,
 					Type: newVariableType,
-					Name: newVariableName,
 				},
 				Bounds: [2]float64{
 					newVariable.(map[string]any)["bounds"].([]any)[0].(float64),
@@ -481,11 +441,10 @@ func (self *Optimization) Prepare() {
 				},
 			}
 		} else if newVariableType == VARIABLE_BINARY {
-			self.Variables[newVariableId] = &OptimizationBinary{
+			self.Variables[variableId] = &OptimizationBinary{
 				OptimizationVariable: &OptimizationVariable{
-					Id:   newVariableId,
+					Id:   variableId,
 					Type: newVariableType,
-					Name: newVariableName,
 				},
 			}
 		} else {
