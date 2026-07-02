@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 const VARIABLE_BINARY = "OptimizationBinary"
@@ -227,7 +228,19 @@ func (self *OptimizationFunctionValue) Parse() (functionDeclaration *ast.FuncDec
 	panic(fmt.Errorf("function not found: %s at %s:%d", functionName, fileName, line))
 }
 
+var functionStringCache = make(map[uintptr]string)
+var functionStringCacheMu sync.RWMutex
+
 func (self *OptimizationFunctionValue) GetString() (output string) {
+	ptr := reflect.ValueOf(self.Function).Pointer()
+
+	functionStringCacheMu.RLock()
+	cached, found := functionStringCache[ptr]
+	functionStringCacheMu.RUnlock()
+	if found {
+		return cached
+	}
+
 	functionDeclaration, fileSet := self.Parse()
 	buffer := &bytes.Buffer{}
 	printErr := printer.Fprint(buffer, fileSet, functionDeclaration)
@@ -235,6 +248,11 @@ func (self *OptimizationFunctionValue) GetString() (output string) {
 		panic(printErr)
 	}
 	output = buffer.String()
+
+	functionStringCacheMu.Lock()
+	functionStringCache[ptr] = output
+	functionStringCacheMu.Unlock()
+
 	return output
 }
 
@@ -356,20 +374,23 @@ func (self *Optimization) Prepare() {
 		panic("Failed to prepare")
 	}
 
-	responseBody := map[string]any{}
+	var responseBody PrepareResponse
 	decodeErr := json.NewDecoder(response.Body).Decode(&responseBody)
 	if decodeErr != nil {
 		panic(decodeErr)
 	}
 
-	for variableId, newVariable := range responseBody["variables"].(map[string]any) {
-		newVariableType := newVariable.(map[string]any)["type"].(string)
+	for variableId, newVariable := range responseBody.Variables {
+		newVariableType := newVariable.Type
 		if newVariableType == VARIABLE_CHOICE {
 			newOptions := map[string]*OptimizationValue{}
-			for optionId, newOption := range newVariable.(map[string]any)["options"].(map[string]any) {
-				newOptionType := newOption.(map[string]any)["type"].(string)
+			for optionId, newOption := range newVariable.Options {
+				newOptionType := newOption.Type
 				if newOptionType == VALUE_FUNCTION {
-					newOptionData := newOption.(map[string]any)["data"].(map[string]any)
+					newOptionData, ok := newOption.Data.(map[string]any)
+					if !ok {
+						panic(fmt.Errorf("VALUE_FUNCTION option data must be a map, got %T", newOption.Data))
+					}
 					oldVariable := self.Variables[variableId]
 					oldOptions := oldVariable.(*OptimizationChoice).Options
 					oldOptionData := oldOptions[optionId].Data.(*OptimizationFunctionValue)
@@ -378,34 +399,31 @@ func (self *Optimization) Prepare() {
 						Type: newOptionType,
 						Data: &OptimizationFunctionValue{
 							Function:               oldOptionData.Function,
-							ErrorPotentiality:      newOptionData["error_potentiality"].(float64),
-							Complexity:             newOptionData["complexity"].(float64),
-							Modularity:             newOptionData["modularity"].(float64),
-							OverallMaintainability: newOptionData["overall_maintainability"].(float64),
-							Understandability:      newOptionData["understandability"].(float64),
-							Readability:            newOptionData["readability"].(float64),
+							ErrorPotentiality:      safeGetFloat(newOptionData, "error_potentiality"),
+							Complexity:             safeGetFloat(newOptionData, "complexity"),
+							Modularity:             safeGetFloat(newOptionData, "modularity"),
+							OverallMaintainability: safeGetFloat(newOptionData, "overall_maintainability"),
+							Understandability:      safeGetFloat(newOptionData, "understandability"),
+							Readability:            safeGetFloat(newOptionData, "readability"),
 						},
 					}
 				} else if newOptionType == VALUE_INTEGER {
-					newOptionData := newOption.(map[string]any)["data"].(int64)
 					newOptions[optionId] = &OptimizationValue{
 						Id:   optionId,
 						Type: newOptionType,
-						Data: newOptionData,
+						Data: safeGetInt64(newOption.Data),
 					}
 				} else if newOptionType == VALUE_FLOAT {
-					newOptionData := newOption.(map[string]any)["data"].(float64)
 					newOptions[optionId] = &OptimizationValue{
 						Id:   optionId,
 						Type: newOptionType,
-						Data: newOptionData,
+						Data: safeGetFloat64(newOption.Data),
 					}
 				} else if newOptionType == VALUE_BOOLEAN {
-					newOptionData := newOption.(map[string]any)["data"].(bool)
 					newOptions[optionId] = &OptimizationValue{
 						Id:   optionId,
 						Type: newOptionType,
-						Data: newOptionData,
+						Data: safeGetBool(newOption.Data),
 					}
 				} else {
 					panic(fmt.Errorf("unsupported newOption type: %s", newOptionType))
@@ -419,26 +437,30 @@ func (self *Optimization) Prepare() {
 				Options: newOptions,
 			}
 		} else if newVariableType == VARIABLE_INTEGER {
+			var bounds [2]int64
+			if len(newVariable.Bounds) >= 2 {
+				bounds[0] = int64(newVariable.Bounds[0])
+				bounds[1] = int64(newVariable.Bounds[1])
+			}
 			self.Variables[variableId] = &OptimizationInteger{
 				OptimizationVariable: &OptimizationVariable{
 					Id:   variableId,
 					Type: newVariableType,
 				},
-				Bounds: [2]int64{
-					int64(newVariable.(map[string]any)["bounds"].([]any)[0].(float64)),
-					int64(newVariable.(map[string]any)["bounds"].([]any)[1].(float64)),
-				},
+				Bounds: bounds,
 			}
 		} else if newVariableType == VARIABLE_REAL {
+			var bounds [2]float64
+			if len(newVariable.Bounds) >= 2 {
+				bounds[0] = newVariable.Bounds[0]
+				bounds[1] = newVariable.Bounds[1]
+			}
 			self.Variables[variableId] = &OptimizationReal{
 				OptimizationVariable: &OptimizationVariable{
 					Id:   variableId,
 					Type: newVariableType,
 				},
-				Bounds: [2]float64{
-					newVariable.(map[string]any)["bounds"].([]any)[0].(float64),
-					newVariable.(map[string]any)["bounds"].([]any)[1].(float64),
-				},
+				Bounds: bounds,
 			}
 		} else if newVariableType == VARIABLE_BINARY {
 			self.Variables[variableId] = &OptimizationBinary{
@@ -523,4 +545,66 @@ type OptimizationPrepareResponse struct {
 
 type OptimizationEvaluatePrepareRequest struct {
 	VariableValues map[string]*OptimizationValue `json:"variable_values"`
+}
+
+type PrepareResponse struct {
+	Variables map[string]PrepareResponseVariable `json:"variables"`
+}
+
+type PrepareResponseVariable struct {
+	Id      string                           `json:"id"`
+	Type    string                           `json:"type"`
+	Bounds  []float64                        `json:"bounds"`
+	Options map[string]PrepareResponseOption `json:"options"`
+}
+
+type PrepareResponseOption struct {
+	Id   string `json:"id"`
+	Type string `json:"type"`
+	Data any    `json:"data"`
+}
+
+func safeGetFloat(m map[string]any, key string) float64 {
+	val, ok := m[key]
+	if !ok || val == nil {
+		return 0.0
+	}
+	f, ok := val.(float64)
+	if ok {
+		return f
+	}
+	return 0.0
+}
+
+func safeGetInt64(val any) int64 {
+	if val == nil {
+		return 0
+	}
+	if f, ok := val.(float64); ok {
+		return int64(f)
+	}
+	if i, ok := val.(int64); ok {
+		return i
+	}
+	return 0
+}
+
+func safeGetFloat64(val any) float64 {
+	if val == nil {
+		return 0.0
+	}
+	if f, ok := val.(float64); ok {
+		return f
+	}
+	return 0.0
+}
+
+func safeGetBool(val any) bool {
+	if val == nil {
+		return false
+	}
+	if b, ok := val.(bool); ok {
+		return b
+	}
+	return false
 }
